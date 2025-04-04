@@ -5,7 +5,7 @@ macro_rules! component_store_data {
     ($($field:ident => $t:ty,)*) => (
         #[derive(Default)]
         pub struct ComponentStoreData {
-            $($field: Vec<$t>,)*
+            $(pub $field: Vec<$t>,)*
         }
 
         $(

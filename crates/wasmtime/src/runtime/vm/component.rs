@@ -835,6 +835,10 @@ impl OwnedComponentInstance {
     pub fn resource_types_mut(&mut self) -> &mut Arc<dyn Any + Send + Sync> {
         unsafe { &mut (*self.ptr.as_ptr()).resource_types }
     }
+
+    pub fn drop_table(&mut self) {
+        unsafe { self.instance_mut().concurrent_state.drop_table() }
+    }
 }
 
 impl Deref for OwnedComponentInstance {

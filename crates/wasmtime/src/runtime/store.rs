@@ -2236,6 +2236,15 @@ impl<T> Drop for Store<T> {
 
         // for documentation on this `unsafe`, see `into_data`.
         unsafe {
+            for component in self.inner.store_data.components.instances.iter_mut() {
+                let Some(component) = component.as_mut() else {
+                    continue;
+                };
+
+                component.state.drop_table();
+                // ..
+            }
+
             ManuallyDrop::drop(&mut self.inner.data);
             ManuallyDrop::drop(&mut self.inner);
         }
@@ -2248,6 +2257,10 @@ impl Drop for StoreOpaque {
         // That is deallocated by `Drop for Store<T>` above.
 
         unsafe {
+            for instance in self.instances.iter_mut() {
+                // ...
+            }
+
             let allocator = self.engine.allocator();
             let ondemand = OnDemandInstanceAllocator::default();
             for instance in self.instances.iter_mut() {
