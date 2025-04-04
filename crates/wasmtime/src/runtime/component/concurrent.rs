@@ -1398,7 +1398,7 @@ impl ComponentInstance {
                                     break;
                                 } else {
                                     unsafe {
-                                        suspend_fiber(fiber.suspend, fiber.stack_limit, None)?;
+                                        suspend_fiber(fiber.suspend, None)?;
                                     };
                                 }
                             }
@@ -3310,7 +3310,6 @@ pub(crate) struct AsyncCx {
         Option<*mut dyn VMStore>,
         (Option<*mut dyn VMStore>, Result<()>),
     >,
-    current_stack_limit: *mut usize,
     current_poll_cx: *mut PollContext,
     track_pkey_context_switch: bool,
 }
@@ -3327,7 +3326,6 @@ impl AsyncCx {
         } else {
             Some(Self {
                 current_suspend: store.concurrent_async_state().current_suspend.get(),
-                current_stack_limit: store.vm_store_context().stack_limit.get(),
                 current_poll_cx,
                 track_pkey_context_switch: store.has_pkey(),
             })
@@ -3365,7 +3363,7 @@ impl AsyncCx {
         } else {
             ProtectionMask::all()
         };
-        let store = suspend_fiber(self.current_suspend, self.current_stack_limit, store);
+        let store = suspend_fiber(self.current_suspend, store);
         if self.track_pkey_context_switch {
             mpk::allow(previous_mask);
         }
@@ -3550,7 +3548,6 @@ struct StoreFiber<'a> {
         Option<*mut dyn VMStore>,
         (Option<*mut dyn VMStore>, Result<()>),
     >,
-    stack_limit: *mut usize,
     instance: Option<RuntimeComponentInstanceIndex>,
 }
 
@@ -3607,7 +3604,6 @@ unsafe fn make_fiber<'a>(
             .concurrent_async_state()
             .current_suspend
             .get(),
-        stack_limit: (*store).vm_store_context().stack_limit.get(),
         instance,
     })
 }
@@ -3631,7 +3627,6 @@ unsafe fn resume_fiber_raw<'a>(
     }
 
     let _reset_suspend = Reset((*fiber).suspend, *(*fiber).suspend);
-    let _reset_stack_limit = Reset((*fiber).stack_limit, *(*fiber).stack_limit);
     let state = Some((*fiber).state.take().unwrap().push());
     let restore = Restore { fiber, state };
     (*restore.fiber)
@@ -3667,11 +3662,9 @@ unsafe fn suspend_fiber(
         Option<*mut dyn VMStore>,
         (Option<*mut dyn VMStore>, Result<()>),
     >,
-    stack_limit: *mut usize,
     store: Option<*mut dyn VMStore>,
 ) -> Result<Option<*mut dyn VMStore>> {
     let _reset_suspend = Reset(suspend, *suspend);
-    let _reset_stack_limit = Reset(stack_limit, *stack_limit);
     assert!(!(*suspend).is_null());
     let (store, result) = (**suspend).suspend(store);
     result?;

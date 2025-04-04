@@ -439,7 +439,8 @@ mod call_thread_state {
         #[cfg(all(has_native_signals, unix))]
         pub(crate) async_guard_range: Range<*mut u8>,
 
-        // The values of `VMStoreContext::last_wasm_{exit_{pc,fp},entry_sp}` for
+        // The values of
+        // `VMStoreContext::{stack_limit,last_wasm_{exit_{pc,fp},entry_sp}}` for
         // the *previous* `CallThreadState` for this same store/limits. Our
         // *current* last wasm PC/FP/SP are saved in `self.vm_store_context`. We
         // save a copy of the old registers here because the `VMStoreContext`
@@ -447,9 +448,10 @@ mod call_thread_state {
         // typically calls back into the same store and `self.vm_store_context
         // == self.prev.vm_store_context`) and we must to maintain the list of
         // contiguous-Wasm-frames stack regions for backtracing purposes.
-        old_last_wasm_exit_fp: Cell<usize>,
-        old_last_wasm_exit_pc: Cell<usize>,
-        old_last_wasm_entry_fp: Cell<usize>,
+        pub(super) old_stack_limit: Cell<usize>,
+        pub(super) old_last_wasm_exit_fp: Cell<usize>,
+        pub(super) old_last_wasm_exit_pc: Cell<usize>,
+        pub(super) old_last_wasm_entry_fp: Cell<usize>,
     }
 
     impl Drop for CallThreadState {
@@ -460,6 +462,7 @@ mod call_thread_state {
 
             unsafe {
                 let cx = self.vm_store_context.as_ref();
+                *cx.stack_limit.get() = self.old_stack_limit.get();
                 *cx.last_wasm_exit_fp.get() = self.old_last_wasm_exit_fp.get();
                 *cx.last_wasm_exit_pc.get() = self.old_last_wasm_exit_pc.get();
                 *cx.last_wasm_entry_fp.get() = self.old_last_wasm_entry_fp.get();
@@ -500,6 +503,7 @@ mod call_thread_state {
                 #[cfg(all(has_native_signals, unix))]
                 async_guard_range,
                 prev: Cell::new(ptr::null()),
+                old_stack_limit: Cell::new(unsafe { *vm_store_context.as_ref().stack_limit.get() }),
                 old_last_wasm_exit_fp: Cell::new(unsafe {
                     *vm_store_context.as_ref().last_wasm_exit_fp.get()
                 }),
@@ -825,6 +829,21 @@ pub(crate) mod tls {
 
     pub use raw::initialize as tls_eager_initialize;
 
+    #[cfg(feature = "async")]
+    impl CallThreadState {
+        unsafe fn swap(&self) {
+            unsafe fn swap(a: &core::cell::UnsafeCell<usize>, b: &core::cell::Cell<usize>) {
+                *a.get() = b.replace(*a.get());
+            }
+
+            let cx = self.vm_store_context.as_ref();
+            swap(&cx.stack_limit, &self.old_stack_limit);
+            swap(&cx.last_wasm_exit_fp, &self.old_last_wasm_exit_fp);
+            swap(&cx.last_wasm_exit_pc, &self.old_last_wasm_exit_pc);
+            swap(&cx.last_wasm_entry_fp, &self.old_last_wasm_entry_fp);
+        }
+    }
+
     /// Opaque state used to persist the state of the `CallThreadState`
     /// activations associated with a fiber stack that's used as part of an
     /// async wasm call.
@@ -873,6 +892,13 @@ pub(crate) mod tls {
             // list as stored in the state of this current thread.
             let ret = PreviousAsyncWasmCallState { state: raw::get() };
             let mut ptr = self.state;
+
+            if let Some(state) = ptr.as_ref() {
+                // Swap the current PC/FP/SP/etc. with those in the oldest
+                // activation so we can restore them later in
+                // `PreviousAsyncWasmCallState::restore`
+                state.swap();
+            }
             while let Some(state) = ptr.as_ref() {
                 ptr = state.prev.replace(core::ptr::null_mut());
                 state.push();
@@ -932,14 +958,22 @@ pub(crate) mod tls {
                 // this loop is finished.
                 let ptr = raw::get();
                 if ptr == thread_head {
+                    if let Some(state) = ret.state.as_ref() {
+                        // Swap the current PC/FP/SP/etc. with those in the
+                        // oldest activation, which reverses what we did in
+                        // `AsyncWasmCallState::push`.
+                        state.swap();
+                    }
+
                     break ret;
                 }
 
                 // Pop this activation from the current thread's TLS state, and
                 // then afterwards push it onto our own linked list within this
-                // `AsyncWasmCallState`. Note that the linked list in `AsyncWasmCallState` is stored
-                // in reverse order so a subsequent `push` later on pushes
-                // everything in the right order.
+                // `AsyncWasmCallState`. Note that the linked list in
+                // `AsyncWasmCallState` is stored in reverse order so a
+                // subsequent `push` later on pushes everything in the right
+                // order.
                 (*ptr).pop();
                 if let Some(state) = ret.state.as_ref() {
                     (*ptr).prev.set(state);
