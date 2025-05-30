@@ -9,6 +9,7 @@ use {
         component::{
             Instance, Lower, Val, WasmList, WasmStr,
             func::{self, Lift, LiftContext, LowerContext, Options},
+            instance::InstanceToken,
             matching::InstanceType,
             values::{ErrorContextAny, FutureAny, StreamAny},
         },
@@ -622,11 +623,7 @@ impl<T> HostFuture<T> {
             instance: self.instance,
             id: self.id,
             rep: self.rep,
-            tx: Some(instance.start_read_event_loop::<_, _, U>(
-                store,
-                self.rep,
-                TransmitKind::Future,
-            )),
+            tx: Some(instance.start_read_event_loop(store, self.rep, TransmitKind::Future)),
         }
     }
 
@@ -1023,11 +1020,7 @@ impl<T> HostStream<T> {
             instance: self.instance,
             id: self.id,
             rep: self.rep,
-            tx: Some(instance.start_read_event_loop::<_, _, U>(
-                store,
-                self.rep,
-                TransmitKind::Stream,
-            )),
+            tx: Some(instance.start_read_event_loop(store, self.rep, TransmitKind::Stream)),
         }
     }
 
@@ -1552,14 +1545,14 @@ impl Instance {
     ) -> Result<(FutureWriter<T>, FutureReader<T>)> {
         store
             .as_context_mut()
-            .with_detached_instance(self, |mut store, instance| {
+            .with_detached_instance(self, |mut store, instance, token| {
                 let (write, read) = instance.new_transmit(TransmitKind::Future)?;
 
                 Ok((
                     FutureWriter::new(
                         default,
-                        Some(instance.start_write_event_loop::<_, _, U>(
-                            store.as_context_mut(),
+                        Some(instance.start_write_event_loop(
+                            token,
                             write.rep(),
                             TransmitKind::Future,
                         )),
@@ -1567,8 +1560,8 @@ impl Instance {
                     ),
                     FutureReader::new(
                         read.rep(),
-                        Some(instance.start_read_event_loop::<_, _, U>(
-                            store.as_context_mut(),
+                        Some(instance.start_read_event_loop(
+                            token,
                             read.rep(),
                             TransmitKind::Future,
                         )),
@@ -1593,13 +1586,13 @@ impl Instance {
     ) -> Result<(StreamWriter<W>, StreamReader<R>)> {
         store
             .as_context_mut()
-            .with_detached_instance(self, |mut store, instance| {
+            .with_detached_instance(self, |mut store, instance, token| {
                 let (write, read) = instance.new_transmit(TransmitKind::Stream)?;
 
                 Ok((
                     StreamWriter::new(
-                        Some(instance.start_write_event_loop::<_, _, U>(
-                            store.as_context_mut(),
+                        Some(instance.start_write_event_loop(
+                            token,
                             write.rep(),
                             TransmitKind::Stream,
                         )),
@@ -1607,8 +1600,8 @@ impl Instance {
                     ),
                     StreamReader::new(
                         read.rep(),
-                        Some(instance.start_read_event_loop::<_, _, U>(
-                            store.as_context_mut(),
+                        Some(instance.start_read_event_loop(
+                            token,
                             read.rep(),
                             TransmitKind::Stream,
                         )),
@@ -1621,8 +1614,8 @@ impl Instance {
 }
 
 /// Retrieve the `TransmitState` rep for the specified `TransmitHandle` rep.
-fn get_state_rep(rep: u32) -> Result<u32> {
-    super::with_local_instance(|_, instance| {
+fn get_state_rep<T>(token: &InstanceToken<T>, rep: u32) -> Result<u32> {
+    super::with_local_instance(token, |_, instance| {
         let transmit_handle = TableId::<TransmitHandle>::new(rep);
         Ok(instance
             .get(transmit_handle)
@@ -1669,7 +1662,7 @@ impl ComponentInstance {
         U: 'static,
     >(
         &mut self,
-        store: StoreContextMut<U>,
+        token: InstanceToken<U>,
         rep: u32,
         kind: TransmitKind,
     ) -> mpsc::Sender<WriteEvent<B>> {
@@ -1677,21 +1670,20 @@ impl ComponentInstance {
         let id = TableId::<TransmitHandle>::new(rep);
         let run_on_drop =
             RunOnDrop::new(move || log::trace!("write event loop for {id:?} dropped"));
-        let token = StoreToken::new(store);
         let task = Box::pin(
             async move {
                 log::trace!("write event loop for {id:?} started");
                 let mut my_rep = None;
                 while let Some(event) = rx.next().await {
                     if my_rep.is_none() {
-                        my_rep = Some(get_state_rep(rep)?);
+                        my_rep = Some(get_state_rep(&token, rep)?);
                     }
                     let rep = my_rep.unwrap();
                     match event {
                         WriteEvent::Write { buffer, tx } => {
-                            super::with_local_instance(|store, instance| {
+                            super::with_local_instance(&token, |store, instance| {
                                 instance.host_write::<_, _, U>(
-                                    token.as_context_mut(store),
+                                    store,
                                     rep,
                                     buffer,
                                     PostWrite::Continue,
@@ -1701,10 +1693,10 @@ impl ComponentInstance {
                             })?
                         }
                         WriteEvent::Close(default) => {
-                            super::with_local_instance(|store, instance| {
+                            super::with_local_instance(&token, |store, instance| {
                                 if let Some(default) = default {
                                     instance.host_write::<_, _, U>(
-                                        token.as_context_mut(store),
+                                        store,
                                         rep,
                                         default(),
                                         PostWrite::Continue,
@@ -1715,13 +1707,15 @@ impl ComponentInstance {
                                 instance.host_close_writer(rep, kind)
                             })?
                         }
-                        WriteEvent::Watch { tx } => super::with_local_instance(|_, instance| {
-                            let state = instance.get_mut(TableId::<TransmitState>::new(rep))?;
-                            if !matches!(&state.read, ReadState::Closed) {
-                                state.reader_watcher = Some(tx);
-                            }
-                            Ok::<_, anyhow::Error>(())
-                        })?,
+                        WriteEvent::Watch { tx } => {
+                            super::with_local_instance(&token, |_, instance| {
+                                let state = instance.get_mut(TableId::<TransmitState>::new(rep))?;
+                                if !matches!(&state.read, ReadState::Closed) {
+                                    state.reader_watcher = Some(tx);
+                                }
+                                Ok::<_, anyhow::Error>(())
+                            })?
+                        }
                     }
                 }
                 Ok(())
@@ -1744,56 +1738,53 @@ impl ComponentInstance {
         U: 'static,
     >(
         &mut self,
-        store: StoreContextMut<U>,
+        token: InstanceToken<U>,
         rep: u32,
         kind: TransmitKind,
     ) -> mpsc::Sender<ReadEvent<B>> {
         let (tx, mut rx) = mpsc::channel(1);
         let id = TableId::<TransmitHandle>::new(rep);
         let run_on_drop = RunOnDrop::new(move || log::trace!("read event loop for {id:?} dropped"));
-        let token = StoreToken::new(store);
         let task = Box::pin(
             async move {
                 log::trace!("read event loop for {id:?} started");
                 let mut my_rep = None;
                 while let Some(event) = rx.next().await {
                     if my_rep.is_none() {
-                        my_rep = Some(get_state_rep(rep)?);
+                        my_rep = Some(get_state_rep(&token, rep)?);
                     }
                     let rep = my_rep.unwrap();
                     match event {
                         ReadEvent::Read { buffer, tx } => {
-                            super::with_local_instance(|store, instance| {
-                                instance.host_read::<_, _, U>(
-                                    token.as_context_mut(store),
-                                    rep,
-                                    buffer,
-                                    tx,
-                                    kind,
-                                )
+                            super::with_local_instance(&token, |store, instance| {
+                                instance.host_read::<_, _, U>(store, rep, buffer, tx, kind)
                             })?
                         }
-                        ReadEvent::Close => super::with_local_instance(|store, instance| {
-                            instance.host_close_reader(store, rep, kind)
-                        })?,
-                        ReadEvent::Watch { tx } => super::with_local_instance(|_, instance| {
-                            let state = instance.get_mut(TableId::<TransmitState>::new(rep))?;
-                            if !matches!(
-                                &state.write,
-                                WriteState::Closed
-                                    | WriteState::GuestReady {
-                                        post_write: PostWrite::Close,
-                                        ..
-                                    }
-                                    | WriteState::HostReady {
-                                        post_write: PostWrite::Close,
-                                        ..
-                                    }
-                            ) {
-                                state.writer_watcher = Some(tx);
-                            }
-                            Ok::<_, anyhow::Error>(())
-                        })?,
+                        ReadEvent::Close => {
+                            super::with_local_instance(&token, |store, instance| {
+                                instance.host_close_reader(store.0.traitobj_mut(), rep, kind)
+                            })?
+                        }
+                        ReadEvent::Watch { tx } => {
+                            super::with_local_instance(&token, |_, instance| {
+                                let state = instance.get_mut(TableId::<TransmitState>::new(rep))?;
+                                if !matches!(
+                                    &state.write,
+                                    WriteState::Closed
+                                        | WriteState::GuestReady {
+                                            post_write: PostWrite::Close,
+                                            ..
+                                        }
+                                        | WriteState::HostReady {
+                                            post_write: PostWrite::Close,
+                                            ..
+                                        }
+                                ) {
+                                    state.writer_watcher = Some(tx);
+                                }
+                                Ok::<_, anyhow::Error>(())
+                            })?
+                        }
                     }
                 }
                 Ok(())

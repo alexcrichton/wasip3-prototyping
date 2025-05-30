@@ -363,7 +363,7 @@ where
 
         let future = closure(store.as_context_mut(), instance, params);
 
-        let ret = instance.poll_and_block(store.0.traitobj_mut(), future, caller_instance)?;
+        let ret = instance.poll_and_block(store.as_context_mut(), future, caller_instance)?;
 
         let instance_ptr = instance as *mut _;
         store.with_attached_instance(instance, |store, _| unsafe {
@@ -856,7 +856,7 @@ where
             result_tys.types.len(),
         );
         let result_vals =
-            (*instance).poll_and_block(store.0.traitobj_mut(), future, caller_instance)?;
+            (*instance).poll_and_block(store.as_context_mut(), future, caller_instance)?;
 
         let instance_ptr = instance as *mut _;
         store.with_attached_instance(instance, |store, _| unsafe {

@@ -112,7 +112,7 @@ use func_refs::FuncRefs;
 #[cfg(feature = "component-model-async")]
 mod token;
 #[cfg(feature = "component-model-async")]
-pub(crate) use token::StoreToken;
+pub(crate) use token::*;
 #[cfg(feature = "async")]
 mod async_;
 #[cfg(all(feature = "async", feature = "call-hook"))]

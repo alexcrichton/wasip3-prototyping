@@ -34,6 +34,8 @@ use wasmtime_environ::{EntityIndex, EntityType, Global, PrimaryMap, WasmValType}
 #[derive(Copy, Clone)]
 pub struct Instance(pub(crate) Stored<Option<Box<InstanceData>>>);
 
+pub(crate) type InstanceToken<T> = crate::store::StoreDataToken<T, Option<Box<InstanceData>>>;
+
 pub(crate) struct InstanceData {
     instances: PrimaryMap<RuntimeInstanceIndex, crate::Instance>,
 
