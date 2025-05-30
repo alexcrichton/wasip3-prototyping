@@ -1,4 +1,5 @@
 use crate::component::func::{Func, LiftContext, LowerContext, Options};
+use crate::component::instance::InstanceToken;
 use crate::component::matching::InstanceType;
 use crate::component::storage::{storage_as_slice, storage_as_slice_mut};
 use crate::prelude::*;
@@ -1892,7 +1893,7 @@ pub struct WasmList<T> {
     // reference to something inside a `StoreOpaque`, but that's not easily
     // available at this time, so it's left as a future exercise.
     types: Arc<ComponentTypes>,
-    instance: SendSyncPtr<ComponentInstance>,
+    instance: InstanceToken,
     _marker: marker::PhantomData<T>,
 }
 
@@ -1919,7 +1920,7 @@ impl<T: Lift> WasmList<T> {
             options: *cx.options,
             elem,
             types: cx.types.clone(),
-            instance: SendSyncPtr::new(NonNull::new(cx.instance_ptr()).unwrap()),
+            instance: cx.instance_token(),
             _marker: marker::PhantomData,
         })
     }
@@ -1953,8 +1954,7 @@ impl<T: Lift> WasmList<T> {
         // this is guaranteed to be the same store. This means that this should
         // be carrying over the original assertion from the original creation of
         // the lifting context that created this type.
-        let mut cx =
-            unsafe { LiftContext::new(store, &self.options, &self.types, self.instance.as_ptr()) };
+        let mut cx = LiftContext::new(store, &self.options, &self.types, self.instance.as_ptr());
         self.get_from_store(&mut cx, index)
     }
 
@@ -1981,10 +1981,7 @@ impl<T: Lift> WasmList<T> {
         store: impl Into<StoreContextMut<'a, U>>,
     ) -> impl ExactSizeIterator<Item = Result<T>> + 'a {
         let store = store.into().0;
-        self.options.store_id().assert_belongs_to(store.id());
-        // See comments about unsafety in the `get` method.
-        let mut cx =
-            unsafe { LiftContext::new(store, &self.options, &self.types, self.instance.as_ptr()) };
+        let mut cx = LiftContext::new(store, &self.options, &self.types, self.instance);
         (0..self.len).map(move |i| self.get_from_store(&mut cx, i).unwrap())
     }
 }

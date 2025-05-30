@@ -1329,7 +1329,7 @@ impl StoreOpaque {
             self.id()
         );
         self.instances.push(StoreInstance {
-            handle: handle.clone(),
+            handle,
             kind: StoreInstanceKind::Dummy,
         });
         id

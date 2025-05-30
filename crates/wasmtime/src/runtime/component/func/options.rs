@@ -1,4 +1,5 @@
 use crate::component::ResourceType;
+use crate::component::instance::InstanceToken;
 use crate::component::matching::InstanceType;
 use crate::component::resources::{HostResourceData, HostResourceIndex, HostResourceTables};
 use crate::prelude::*;
@@ -211,23 +212,17 @@ pub struct LowerContext<'a, T: 'static> {
     /// into.
     ///
     /// This pointer is required to be owned by the `store` provided.
-    pub(crate) instance: *mut ComponentInstance,
+    pub(crate) instance: InstanceToken,
 }
 
 #[doc(hidden)]
 impl<'a, T: 'static> LowerContext<'a, T> {
     /// Creates a new lowering context from the specified parameters.
-    ///
-    /// # Unsafety
-    ///
-    /// This function is unsafe as it needs to be guaranteed by the caller that
-    /// the `instance` here is valid within `store` and is a valid component
-    /// instance.
-    pub unsafe fn new(
+    pub fn new(
         store: StoreContextMut<'a, T>,
         options: &'a Options,
         types: &'a ComponentTypes,
-        instance: *mut ComponentInstance,
+        instance: InstanceToken,
     ) -> LowerContext<'a, T> {
         LowerContext {
             store,
@@ -400,6 +395,11 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     pub fn exit_call(&mut self) -> Result<()> {
         self.resource_tables().exit_call()
     }
+
+    /// TODO
+    pub fn instance_mut(&mut self) -> &mut ComponentInstance {
+        todo!()
+    }
 }
 
 /// Contextual information used when lifting a type from a component into the
@@ -417,7 +417,7 @@ pub struct LiftContext<'a> {
 
     memory: Option<&'a [u8]>,
 
-    pub(crate) instance: *mut ComponentInstance,
+    instance: InstanceToken,
 
     host_table: &'a mut ResourceTable,
     host_resource_data: &'a mut HostResourceData,
@@ -438,7 +438,7 @@ impl<'a> LiftContext<'a> {
         store: &'a mut StoreOpaque,
         options: &'a Options,
         types: &'a Arc<ComponentTypes>,
-        instance: *mut ComponentInstance,
+        instance: InstanceToken,
     ) -> LiftContext<'a> {
         // From `&mut StoreOpaque` provided the goal here is to project out
         // three different disjoint fields owned by the store: memory,
@@ -476,11 +476,6 @@ impl<'a> LiftContext<'a> {
     /// created.
     pub fn store_id(&self) -> StoreId {
         self.options.store_id
-    }
-
-    /// Returns the component instance raw pointer that is being lifted from.
-    pub fn instance_ptr(&self) -> *mut ComponentInstance {
-        self.instance
     }
 
     /// Lifts an `own` resource from the guest at the `idx` specified into its
@@ -563,5 +558,15 @@ impl<'a> LiftContext<'a> {
     #[inline]
     pub fn exit_call(&mut self) -> Result<()> {
         self.resource_tables().exit_call()
+    }
+
+    /// TODO
+    pub fn instance_token(&self) -> InstanceToken {
+        self.instance
+    }
+
+    /// TODO
+    pub fn instance_mut(&mut self) -> &mut ComponentInstance {
+        todo!()
     }
 }

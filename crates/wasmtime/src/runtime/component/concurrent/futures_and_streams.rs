@@ -220,12 +220,9 @@ fn accept_reader<T: func::Lower + Send + 'static, B: WriteBuffer<T>, U: 'static>
                 let types = instance.component_types().clone();
                 let count = buffer.remaining().len().min(count);
 
-                store.with_attached_instance(instance, |mut store, _| {
-                    // SAFETY: `ptr` is derived from `interface` and thus known
-                    // to be valid.
-                    let lower = unsafe {
-                        &mut LowerContext::new(store.as_context_mut(), options, &types, ptr)
-                    };
+                store.with_attached_instance(instance, |mut store, _, token| {
+                    let lower =
+                        &mut LowerContext::new(store.as_context_mut(), options, &types, token);
                     if address % usize::try_from(T::ALIGN32)? != 0 {
                         bail!("read pointer not aligned");
                     }
@@ -658,10 +655,7 @@ impl<T> HostFuture<T> {
     fn lift_from_index(cx: &mut LiftContext<'_>, ty: InterfaceType, index: u32) -> Result<Self> {
         match ty {
             InterfaceType::Future(src) => {
-                // SAFETY: Per the contract of `LiftContext::new`, the
-                // `instance` field must be valid for as long as the
-                // `LiftContext` itself is valid.
-                let instance = unsafe { &mut *cx.instance };
+                let instance = cx.instance_mut();
                 let state_table = instance.state_table(TableIndex::Future(src));
                 let (rep, state) =
                     get_mut_by_index_from(state_table, TableIndex::Future(src), index)?;
@@ -689,11 +683,7 @@ pub(crate) fn lower_future_to_index<U>(
 ) -> Result<u32> {
     match ty {
         InterfaceType::Future(dst) => {
-            // SAFETY: Per the contract of `LowerContext::new`, the `instance`
-            // field must be valid for as long as the `LowerContext` itself is
-            // valid, as long as we don't try to access it via the `store` at
-            // the same time (which we don't).
-            let instance = unsafe { &mut *cx.instance };
+            let instance = cx.instance_mut();
             let state = instance.get(TableId::<TransmitHandle>::new(rep))?.state;
             let rep = instance.get(state)?.read_handle.rep();
 
@@ -1059,10 +1049,7 @@ impl<T> HostStream<T> {
     fn lift_from_index(cx: &mut LiftContext<'_>, ty: InterfaceType, index: u32) -> Result<Self> {
         match ty {
             InterfaceType::Stream(src) => {
-                // SAFETY: Per the contract of `LiftContext::new`, the
-                // `instance` field must be valid for as long as the
-                // `LiftContext` itself is valid.
-                let instance = unsafe { &mut *cx.instance };
+                let instance = cx.instance_mut();
                 let state_table = instance.state_table(TableIndex::Stream(src));
                 let (rep, state) =
                     get_mut_by_index_from(state_table, TableIndex::Stream(src), index)?;
@@ -1094,7 +1081,7 @@ pub(crate) fn lower_stream_to_index<U>(
             // field must be valid for as long as the `LowerContext` itself is
             // valid, as long as we don't try to access it via the `store` at
             // the same time (which we don't).
-            let instance = unsafe { &mut *cx.instance };
+            let instance = cx.instance_mut();
             let state = instance.get(TableId::<TransmitHandle>::new(rep))?.state;
             let rep = instance.get(state)?.read_handle.rep();
 
@@ -1282,10 +1269,7 @@ impl ErrorContext {
     fn lift_from_index(cx: &mut LiftContext<'_>, ty: InterfaceType, index: u32) -> Result<Self> {
         match ty {
             InterfaceType::ErrorContext(src) => {
-                // SAFETY: Per the contract of `LiftContext::new`, the
-                // `instance` field must be valid for as long as the
-                // `LiftContext` itself is valid.
-                let instance = unsafe { &mut *cx.instance };
+                let instance = cx.instance_mut();
                 let (rep, _) = instance
                     .error_context_tables()
                     .get_mut(src)
@@ -1306,11 +1290,7 @@ pub(crate) fn lower_error_context_to_index<U>(
 ) -> Result<u32> {
     match ty {
         InterfaceType::ErrorContext(dst) => {
-            // SAFETY: Per the contract of `LowerContext::new`, the `instance`
-            // field must be valid for as long as the `LowerContext` itself is
-            // valid, as long as we don't try to access it via the `store` at
-            // the same time (which we don't).
-            let instance = unsafe { &mut *cx.instance };
+            let instance = cx.instance_mut();
             let tbl = &mut instance
                 .error_context_tables()
                 .get_mut(dst)
@@ -1764,7 +1744,7 @@ impl ComponentInstance {
                     match event {
                         ReadEvent::Read { buffer, tx } => {
                             super::with_local_instance(|store, instance| {
-                                instance.host_read::<_, _, U>(
+                                instance.host_read(
                                     token.as_context_mut(store),
                                     rep,
                                     buffer,
@@ -2122,10 +2102,8 @@ impl ComponentInstance {
                 let write_handle = transmit.write_handle;
                 let instance = self as *mut _;
                 let types = self.component_types();
-                // SAFETY: `instance` is derived from `self` and thus known to be valid.
-                let lift = unsafe {
-                    &mut LiftContext::new(store.0.store_opaque_mut(), &options, types, instance)
-                };
+                let lift =
+                    &mut LiftContext::new(store.0.store_opaque_mut(), &options, types, instance);
                 let code = accept_writer::<T, B, U>(buffer, tx, kind)(Writer::Guest {
                     lift,
                     ty: payload(ty, types),
@@ -2507,17 +2485,13 @@ impl ComponentInstance {
                     .transpose()?;
 
                 if let Some(val) = val {
-                    store.with_attached_instance(self, |mut store, _| {
-                        // SAFETY: `instance` is derived from `self` and thus
-                        // known to be valid.
-                        let lower = unsafe {
-                            &mut LowerContext::new(
-                                store.as_context_mut(),
-                                read_options,
-                                &types,
-                                instance,
-                            )
-                        };
+                    store.with_attached_instance(self, |mut store, _, instance| {
+                        let lower = &mut LowerContext::new(
+                            store.as_context_mut(),
+                            read_options,
+                            &types,
+                            instance,
+                        );
                         let ty = types[types[read_ty].ty].payload.unwrap();
                         let ptr = func::validate_inbounds_dynamic(
                             types.canonical_abi(&ty),
@@ -2534,8 +2508,7 @@ impl ComponentInstance {
                 let store_opaque = store.0.store_opaque_mut();
                 // SAFETY: `instance` is derived from `self` and thus known to
                 // be valid.
-                let lift =
-                    unsafe { &mut LiftContext::new(store_opaque, write_options, types, instance) };
+                let lift = &mut LiftContext::new(store_opaque, write_options, types, instance);
                 if let Some(flat_abi) = flat_abi {
                     // Fast path memcpy for "flat" (i.e. no pointers or handles) payloads:
                     let length_in_bytes = usize::try_from(flat_abi.size).unwrap() * count;

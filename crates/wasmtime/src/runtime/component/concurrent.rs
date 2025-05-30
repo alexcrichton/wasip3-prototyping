@@ -53,6 +53,7 @@ use {
         component::{
             HasData, HasSelf, Instance,
             func::{self, Func, Options},
+            instance::InstanceToken,
         },
         store::{StoreInner, StoreOpaque, StoreToken},
         vm::{
@@ -889,7 +890,7 @@ impl<T> StoreContextMut<'_, T> {
     pub(crate) fn with_attached_instance<R>(
         &mut self,
         instance: &mut ComponentInstance,
-        fun: impl FnOnce(StoreContextMut<'_, T>, Option<Instance>) -> R,
+        fun: impl FnOnce(StoreContextMut<'_, T>, Option<Instance>, InstanceToken) -> R,
     ) -> R {
         let _state = ResetInstanceThreadLocalState(INSTANCE_STATE.with(|v| match v.get() {
             state @ InstanceThreadLocalState::None => state,
@@ -1298,7 +1299,7 @@ impl ComponentInstance {
 
                 // SAFETY: Per the contract documented in `make_call's`
                 // documentation, `callee` must be a valid pointer.
-                store.with_attached_instance(instance, |mut store, _| unsafe {
+                store.with_attached_instance(instance, |mut store, _, _| unsafe {
                     if let Some(mut flags) = flags {
                         flags.set_may_enter(false);
                     }

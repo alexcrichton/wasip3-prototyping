@@ -17,6 +17,9 @@ use core::ptr::NonNull;
 use wasmtime_environ::{EngineOrModuleTypeIndex, component::*};
 use wasmtime_environ::{EntityIndex, EntityType, Global, PrimaryMap, WasmValType};
 
+mod token;
+pub(crate) use self::token::*;
+
 /// An instantiated component.
 ///
 /// This type represents an instantiated [`Component`](super::Component).
