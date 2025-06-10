@@ -22,6 +22,9 @@ cfg_if::cfg_if! {
     if #[cfg(not(feature = "std"))] {
         mod nostd;
         use nostd as imp;
+    } else if #[cfg(miri)] {
+        mod miri;
+        use miri as imp;
     } else if #[cfg(windows)] {
         mod windows;
         use windows as imp;
@@ -142,6 +145,7 @@ pub struct Suspend<Resume, Yield, Return> {
 enum RunResult<Resume, Yield, Return> {
     Executing,
     Resuming(Resume),
+    Exiting,
     Yield(Yield),
     Returned(Return),
     #[cfg(feature = "std")]
@@ -188,7 +192,7 @@ impl<'a, Resume, Yield, Return> Fiber<'a, Resume, Yield, Return> {
         let result = Cell::new(RunResult::Resuming(val));
         self.inner.resume(&self.stack().0, &result);
         match result.into_inner() {
-            RunResult::Resuming(_) | RunResult::Executing => unreachable!(),
+            RunResult::Resuming(_) | RunResult::Executing | RunResult::Exiting => unreachable!(),
             RunResult::Yield(y) => {
                 self.done.set(false);
                 Err(y)
@@ -247,8 +251,8 @@ impl<Resume, Yield, Return> Suspend<Resume, Yield, Return> {
         #[cfg(feature = "std")]
         {
             use std::panic::{self, AssertUnwindSafe};
-            let result = panic::catch_unwind(AssertUnwindSafe(|| (func)(initial, &mut suspend)));
-            suspend.inner.switch::<Resume, Yield, Return>(match result {
+            let result = panic::catch_unwind(AssertUnwindSafe(|| func(initial, &mut suspend)));
+            suspend.inner.exit::<Resume, Yield, Return>(match result {
                 Ok(result) => RunResult::Returned(result),
                 Err(panic) => RunResult::Panicked(panic),
             });
@@ -270,6 +274,8 @@ impl<Resume, Yield, Return> Suspend<Resume, Yield, Return> {
 impl<A, B, C> Drop for Fiber<'_, A, B, C> {
     fn drop(&mut self) {
         debug_assert!(self.done.get(), "fiber dropped without finishing");
+
+        self.inner.drop::<A, B, C>();
     }
 }
 

@@ -1931,8 +1931,8 @@ at https://bytecodealliance.org/security.
     }
 
     #[cfg(feature = "component-model-async")]
-    pub(crate) fn concurrent_async_state(&mut self) -> &mut concurrent::AsyncState {
-        &mut self.concurrent_async_state
+    pub(crate) fn concurrent_async_state(&mut self) -> *mut concurrent::AsyncState {
+        &raw mut self.concurrent_async_state
     }
 
     #[cfg(feature = "component-model-async")]

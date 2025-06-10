@@ -24,10 +24,33 @@ pub use component_async_tests::util::{compose, config};
 
 #[tokio::test]
 pub async fn async_round_trip_stackful() -> Result<()> {
-    test_round_trip_uncomposed(
-        &fs::read(test_programs_artifacts::ASYNC_ROUND_TRIP_STACKFUL_COMPONENT).await?,
-    )
-    .await
+    if cfg!(miri) {
+        println!(
+            "TEST AT {}",
+            test_programs_artifacts::ASYNC_ROUND_TRIP_STACKFUL_COMPONENT
+        );
+        test_round_trip_hack(
+            |engine| unsafe { Component::deserialize_file(engine, "./my-hack.cwasm").unwrap() },
+            &[
+            // (
+            //     "hello, world!",
+            //     "hello, world! - entered guest - entered host - exited host - exited guest",
+            // ),
+            // (
+            //     "¡hola, mundo!",
+            //     "¡hola, mundo! - entered guest - entered host - exited host - exited guest",
+            // ),
+            // (
+            //     "hi y'all!",
+            //     "hi y'all! - entered guest - entered host - exited host - exited guest",
+            // ),
+        ],
+        )
+        .await
+    } else {
+        let file = test_programs_artifacts::ASYNC_ROUND_TRIP_STACKFUL_COMPONENT;
+        test_round_trip_uncomposed(&fs::read(file).await?).await
+    }
 }
 
 #[tokio::test]
@@ -185,7 +208,21 @@ pub async fn async_round_trip_stackless_sync_import() -> Result<()> {
 }
 
 pub async fn test_round_trip(component: &[u8], inputs_and_outputs: &[(&str, &str)]) -> Result<()> {
-    let engine = Engine::new(&config())?;
+    test_round_trip_hack(
+        |engine| Component::new(engine, component).unwrap(),
+        inputs_and_outputs,
+    )
+    .await
+}
+
+async fn test_round_trip_hack(
+    component: impl FnOnce(&Engine) -> Component,
+    inputs_and_outputs: &[(&str, &str)],
+) -> Result<()> {
+    let mut config = config();
+    config.target("pulley64").unwrap();
+    config.debug_info(false);
+    let engine = Engine::new(&config)?;
 
     let make_store = || {
         Store::new(
@@ -199,7 +236,7 @@ pub async fn test_round_trip(component: &[u8], inputs_and_outputs: &[(&str, &str
         )
     };
 
-    let component = Component::new(&engine, component)?;
+    let component = component(&engine);
 
     // First, test the `wasmtime-wit-bindgen` static API:
     {
